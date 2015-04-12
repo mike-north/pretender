@@ -294,3 +294,19 @@ test("requiresManualResolution returns true for endpoints configured with `true`
   ok(pretender.requiresManualResolution('get', '/some/path'));
   ok(!pretender.requiresManualResolution('get', '/some/other/path'));
 });
+
+test("resolves cross-origin requests", function () {
+
+  var url = 'http://status.github.com/api/status';
+  var payload = 'it works!';
+  var wasCalled;
+
+  pretender.get(url, function(){
+    wasCalled = true;
+    return [200, {}, payload];
+  });
+
+  $.ajax({url: url});
+  ok(wasCalled);
+
+});
