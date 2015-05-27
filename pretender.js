@@ -38,7 +38,8 @@ function parseURL(url) {
  * A registry is a map of HTTP verbs to route recognizers. 
  */
 
-function Registry(host) {
+function Host() {
+  this.handlers = [];
   this.verbs = {
     GET: new RouteRecognizer(),
     PUT: new RouteRecognizer(),
@@ -49,6 +50,34 @@ function Registry(host) {
     OPTIONS: new RouteRecognizer()
   };
 }
+
+Host.prototype = {
+  get: verbify('GET'),
+  post: verbify('POST'),
+  put: verbify('PUT'),
+  'delete': verbify('DELETE'),
+  patch: verbify('PATCH'),
+  head: verbify('HEAD'),
+  
+  register: function register(verb, url, handler, async){
+    if (!handler) {
+      throw new Error("The function you tried passing to Pretender to handle " + verb + " " + url + " is undefined or missing.");
+    }
+
+    handler.numberOfCalls = 0;
+    handler.async = async;
+    this.handlers.push(handler);
+
+    var host = this.verbs[verb];
+
+    host.add([{
+      path: parseURL(url).fullpath,
+      handler: handler
+    }]);
+    return this;
+  }
+};
+
 
 /**
  * Hosts
@@ -70,23 +99,23 @@ function Hosts() {
  *                      hostname and port 
  */
 Hosts.prototype.forURL = function(url) {
-  var host = parseURL(url).host;
-  var registry = this._registries[host];
+  var hostName = parseURL(url).host;
+  var host = this._registries[hostName];
 
-  if (registry === undefined) {
-    registry = (this._registries[host] = new Registry(host));
+  if (host === undefined) {
+    host = (this._registries[hostName] = new Host());
   }
 
-  return registry.verbs;
+  return host;
 }
 
 function Pretender(/* routeMap1, routeMap2, ...*/){
+  this._defaultHost = null;
   maps = slice.call(arguments);
   // Herein we keep track of RouteRecognizer instances
   // keyed by HTTP method. Feel free to add more as needed.
   this.hosts = new Hosts();
 
-  this.handlers = [];
   this.handledRequests = [];
   this.passthroughRequests = [];
   this.unhandledRequests = [];
@@ -191,31 +220,28 @@ function verbify(verb){
 
 var PASSTHROUGH = {};
 
+function delegateToHost(verb) {
+  return function(path, handler, async) {
+    var host = this.hosts.forURL(path) || this.defaultHost();
+    host.register(verb, path, handler, async);
+  }
+};
+
 Pretender.prototype = {
-  get: verbify('GET'),
-  post: verbify('POST'),
-  put: verbify('PUT'),
-  'delete': verbify('DELETE'),
-  patch: verbify('PATCH'),
-  head: verbify('HEAD'),
+  get: delegateToHost('GET'),
+  post: delegateToHost('POST'),
+  put: delegateToHost('PUT'),
+  'delete': delegateToHost('DELETE'),
+  patch: delegateToHost('PATCH'),
+  head: delegateToHost('HEAD'),
+  defaultHost: function () {
+    if (!this._defaultHost) {
+      this._defaultHost = new Host();
+    }
+    return this._defaultHost;
+  },
   map: function(maps){
     maps.call(this);
-  },
-  register: function register(verb, url, handler, async){
-    if (!handler) {
-      throw new Error("The function you tried passing to Pretender to handle " + verb + " " + url + " is undefined or missing.");
-    }
-
-    handler.numberOfCalls = 0;
-    handler.async = async;
-    this.handlers.push(handler);
-
-    var registry = this.hosts.forURL(url)[verb];
-
-    registry.add([{
-      path: parseURL(url).fullpath,
-      handler: handler
-    }]);
   },
   passthrough: PASSTHROUGH,
   checkPassthrough: function checkPassthrough(request) {
@@ -225,7 +251,7 @@ Pretender.prototype = {
 
     verb = verb.toUpperCase();
 
-    var recognized = this.hosts.forURL(request.url)[verb].recognize(path);
+    var recognized = this.hosts.forURL(request.url).verbs[verb].recognize(path);
     var match = recognized && recognized[0];
     if (match && match.handler == PASSTHROUGH) {
       this.passthroughRequests.push(request);
@@ -314,8 +340,8 @@ Pretender.prototype = {
     throw error;
   },
   _handlerFor: function(verb, url, request){
-    var registry = this.hosts.forURL(url)[verb];
-    var matches = registry.recognize(parseURL(url).fullpath);
+    var host = this.hosts.forURL(url).verbs[verb];
+    var matches = host.recognize(parseURL(url).fullpath);
 
     var match = matches ? matches[0] : null;
     if (match) {
@@ -335,7 +361,7 @@ Pretender.prototype = {
 
 Pretender.parseURL = parseURL;
 Pretender.Hosts = Hosts;
-Pretender.Registry = Registry;
+Pretender.Host = Host;
 
 if (isNode) {
   module.exports = Pretender;
