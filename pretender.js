@@ -33,12 +33,12 @@ function parseURL(url) {
 
 
 /**
- * Registry
+ * Host
  * 
  * A registry is a map of HTTP verbs to route recognizers. 
  */
 
-function Registry(host) {
+function Host(host) {
   this.verbs = {
     GET: new RouteRecognizer(),
     PUT: new RouteRecognizer(),
@@ -48,6 +48,82 @@ function Registry(host) {
     HEAD: new RouteRecognizer(),
     OPTIONS: new RouteRecognizer()
   };
+  this.handlers = [];
+}
+
+Host.prototype = {
+  get: verbify('GET'),
+  post: verbify('POST'),
+  put: verbify('PUT'),
+  'delete': verbify('DELETE'),
+  patch: verbify('PATCH'),
+  head: verbify('HEAD'),
+  register: function register(verb, url, handler, async){
+    if (!handler) {
+      throw new Error("The function you tried passing to Pretender to handle " + verb + " " + url + " is undefined or missing.");
+    }
+
+    handler.numberOfCalls = 0;
+    handler.async = async;
+    this.handlers.push(handler);
+
+    var registry = this.verbs[verb];
+
+    registry.add([{
+      path: parseURL(url).fullpath,
+      handler: handler
+    }]);
+  },
+  handleRequest: function handleRequest(request){
+    var verb = request.method.toUpperCase();
+    var path = request.url;
+
+    var handler = this._handlerFor(verb, path, request);
+
+    if (handler) {
+      handler.handler.numberOfCalls++;
+      var async = handler.handler.async;
+      this.handledRequests.push(request);
+
+      try {
+        var statusHeadersAndBody = handler.handler(request),
+            status = statusHeadersAndBody[0],
+            headers = this.prepareHeaders(statusHeadersAndBody[1]),
+            body = this.prepareBody(statusHeadersAndBody[2]),
+            pretender = this;
+
+        this.handleResponse(request, async, function() {
+          request.respond(status, headers, body);
+          pretender.handledRequest(verb, path, request);
+        });
+      } catch (error) {
+        this.erroredRequest(verb, path, request, error);
+        this.resolve(request);
+      }
+    } else {
+      this.unhandledRequests.push(request);
+      this.unhandledRequest(verb, path, request);
+    }
+  },
+  handleResponse: function handleResponse(request, strategy, callback) {
+    strategy = typeof strategy === 'function' ? strategy() : strategy;
+
+    if (strategy === false) {
+      callback();
+    } else {
+      var pretender = this;
+      pretender.requestReferences.push({
+        request: request,
+        callback: callback
+      });
+
+      if (strategy !== true) {
+        setTimeout(function() {
+          pretender.resolve(request);
+        }, typeof strategy === 'number' ? strategy : 0);
+      }
+    }
+  }
 }
 
 /**
@@ -65,7 +141,7 @@ function Hosts() {
  *                for a given URL
  * 
  * @param  {String} url a URL
- * @return {Registry}   a map of HTTP verbs to RouteRecognizers 
+ * @return {Host}   a map of HTTP verbs to RouteRecognizers 
  *                      corresponding to the provided URL's 
  *                      hostname and port 
  */
@@ -74,10 +150,10 @@ Hosts.prototype.forURL = function(url) {
   var registry = this._registries[host];
 
   if (registry === undefined) {
-    registry = (this._registries[host] = new Registry(host));
+    registry = (this._registries[host] = new Host(host));
   }
 
-  return registry.verbs;
+  return registry;
 }
 
 function Pretender(/* routeMap1, routeMap2, ...*/){
@@ -86,7 +162,6 @@ function Pretender(/* routeMap1, routeMap2, ...*/){
   // keyed by HTTP method. Feel free to add more as needed.
   this.hosts = new Hosts();
 
-  this.handlers = [];
   this.handledRequests = [];
   this.passthroughRequests = [];
   this.unhandledRequests = [];
@@ -201,21 +276,14 @@ Pretender.prototype = {
   map: function(maps){
     maps.call(this);
   },
+ 
   register: function register(verb, url, handler, async){
     if (!handler) {
       throw new Error("The function you tried passing to Pretender to handle " + verb + " " + url + " is undefined or missing.");
     }
-
-    handler.numberOfCalls = 0;
-    handler.async = async;
-    this.handlers.push(handler);
-
-    var registry = this.hosts.forURL(url)[verb];
-
-    registry.add([{
-      path: parseURL(url).fullpath,
-      handler: handler
-    }]);
+    var registry = this.hosts.forURL(url);
+    // Defer to registry
+    registry.register(verb, url, handler, async);
   },
   passthrough: PASSTHROUGH,
   checkPassthrough: function checkPassthrough(request) {
@@ -225,7 +293,7 @@ Pretender.prototype = {
 
     verb = verb.toUpperCase();
 
-    var recognized = this.hosts.forURL(request.url)[verb].recognize(path);
+    var recognized = this.hosts.forURL(request.url).verbs[verb].recognize(path);
     var match = recognized && recognized[0];
     if (match && match.handler == PASSTHROUGH) {
       this.passthroughRequests.push(request);
@@ -314,7 +382,7 @@ Pretender.prototype = {
     throw error;
   },
   _handlerFor: function(verb, url, request){
-    var registry = this.hosts.forURL(url)[verb];
+    var registry = this.hosts.forURL(url).verbs[verb];
     var matches = registry.recognize(parseURL(url).fullpath);
 
     var match = matches ? matches[0] : null;
@@ -335,7 +403,7 @@ Pretender.prototype = {
 
 Pretender.parseURL = parseURL;
 Pretender.Hosts = Hosts;
-Pretender.Registry = Registry;
+Pretender.Host = Host;
 
 if (isNode) {
   module.exports = Pretender;

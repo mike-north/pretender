@@ -15,8 +15,8 @@ test("forURL - returns a registry for a relative path", function () {
 });
 
 test("forURL - returns different Registry objects for different hosts ", function () {
-	var registry1 = hosts.forURL('/offers/dinner_out');
-	var registry2 = hosts.forURL('http://www.yahoo.com/offers/dinner_out');
+	var registry1 = hosts.forURL('/offers/dinner_out').verbs;
+	var registry2 = hosts.forURL('http://www.yahoo.com/offers/dinner_out').verbs;
 	registry1['GET'].add({
 		path: 'http://www.yahoo.com/offers/dinner_out',
 		handler: function () {
